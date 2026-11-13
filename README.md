@@ -1,6 +1,6 @@
 # SENTINEL data processing and feature pipeline
 
-Pandas pipeline over the SENTINEL fraud data: load 6 tables, write a data-quality report, compute 6 leakage-free
+Pandas pipeline over the SENTINEL fraud data: load 6 tables (+ provided features) **from Supabase over the REST API**, write a data-quality report, compute 6 leakage-free
 features, assign reason codes R01-R08, and compare everything with the instructor's provided `features` table.
 
 **Result on all 110,000 transactions:** every feature matches the provided table 100.000%, and the reason-code set is identical on 100.000% of rows.
@@ -21,14 +21,29 @@ pandas>=2.1
 numpy>=1.26
 python-dotenv>=1.0
 tabulate>=0.9
+supabase>=2.0
 ```
 
-`.env.example` (copy it to `.env`; no secrets, just a folder path)
+`.env.example` (copy it to `.env` and fill in your own project; `.env` is git-ignored)
 ```
-DATA_DIR=supabase_db_kit/data/tables
+DATA_SOURCE=supabase                       # or "csv" to read the local export offline
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=sb_publishable_xxx            # publishable/anon key, read-only is enough
+DATA_DIR=supabase_db_kit/data/tables       # only used when DATA_SOURCE=csv
 ```
-Put the instructor's `supabase_db_kit` folder **inside** this repo folder (it is git-ignored, never committed), or point `DATA_DIR` somewhere else.
-Expected layout:
+
+### Loading route
+* **Supabase (default).** The tables are first ingested into your Supabase project with the instructor kit
+  (`python supabase_db_kit/ingest.py all`). `sentinel_lib.load_all()` then reads all 7 tables
+  (`customers, merchants, devices, transactions, payment_outcomes, labels, features`) through the Supabase REST API
+  with the `supabase` Python client: an exact row count first, then pages of 1,000 rows ordered by primary key
+  (`.order(pk).range(a, b)`), 8 pages in parallel, one client per thread, retry with back-off on network errors,
+  and a final check that the number of rows received equals the count.
+  API rows are normalised to the export's format (jsonb -> JSON text, timestamps -> `...ss.mmm+00:00`), so the
+  Supabase route returns **exactly the same DataFrames** as the CSV export (verified on all 7 tables).
+* **CSV (offline fallback).** `DATA_SOURCE=csv` reads the gzipped CSV shards in `DATA_DIR`.
+
+Expected layout for the CSV route / the ingest kit:
 ```
 sentinel-feature-pipeline/            <- this repo
   supabase_db_kit/data/tables/{customers,merchants,devices,transactions,payment_outcomes,labels,features}/...
@@ -38,20 +53,20 @@ sentinel-feature-pipeline/            <- this repo
 ## 2. How to run
 
 ```bash
-python 01_load_tables.py            # load + join-integrity check
+python 01_load_tables.py            # load from Supabase + join-integrity check
 python 02_data_quality_report.py    # -> output/data_quality_report.md/.json
 python 03_build_features.py         # 6 features + no-leakage proof (300 rows recomputed by brute force)
 python 04_reason_codes.py           # R01-R08 + fraud lift per code
 python 05_compare_with_provided.py  # -> output/comparison_report.md
 ```
-Whole thing takes about 40 seconds on a laptop.
+Each step loads the tables from Supabase (about 40 s over the API); with `DATA_SOURCE=csv` the whole thing takes about 40 seconds.
 
 ## 3. What is in the repo
 
 | File | Purpose |
 |---|---|
 | `config.py` | settings + **every threshold** (windows, 500 km, 5x, 4/hour, high-risk MCCs) |
-| `sentinel_lib.py` | loading, haversine, rolling-window features, reason codes |
+| `sentinel_lib.py` | loading (Supabase REST API or CSV), haversine, rolling-window features, reason codes |
 | `01`-`05_*.py` | the five steps above |
 | `output/` | generated reports (`data_quality_report.md`, `comparison_report.md`, `feature_match_rates.csv`, `reason_code_summary.csv`) |
 | `screenshots/` | proof of each run (multi-part outputs numbered 1, 2, 3; see section 8) |
@@ -123,7 +138,7 @@ Some outputs were longer than one screen, so they are split into numbered parts 
 
 | Step | Script | Screenshot(s) | What it proves |
 |---|---|---|---|
-| 1 | `01_load_tables.py` | `01_load.png` (part 1), `01_load1.png` (part 2), `01_load2.png` (part 3) | all 7 tables load with row/column counts (customers 2,500, merchants 200, devices 10,120, transactions / payment_outcomes / labels / features 110,000 each); join integrity = 1.0000 for every join |
+| 1 | `01_load_tables.py` | `01_load.png` (part 1), `01_load1.png` (part 2), `01_load2.png` (part 3) | `DATA_SOURCE = supabase`; all 7 tables load from the Supabase API with row/column counts (customers 2,500, merchants 200, devices 10,120, transactions / payment_outcomes / labels / features 110,000 each); join integrity = 1.0000 for every join |
 | 2 | `02_data_quality_report.py` | `02_quality_report.png` (part 1), `02_quality_report1.png` (part 2), `02_quality_report2.png` (part 3), `02_quality_report3.png` (part 4) | 1 rows + fraud rate per split, 2 nulls per column; 3 duplicates (all 0), 4 wrong types / invalid values (all 0); column dtypes, 5 amount outliers (IQR, kept not deleted); 6 time range per split + report saved |
 | 3 | `03_build_features.py` | `03_features_leakage_check.png` | 6 features computed for 110,000 rows, null counts (never filled with 0), **leakage check 300/300 identical** to brute-force "only earlier rows" |
 | 4 | `04_reason_codes.py` | `04_reason_codes.png` | thresholds used, R01-R08 fire counts, fraud rate and lift vs 0.600% base, fraud rate per merchant category |

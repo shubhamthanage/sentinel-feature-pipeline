@@ -1,20 +1,74 @@
 """Shared helpers: loading, feature maths, reason codes. Scripts 01-05 import from here."""
-import glob, json
+import glob, io, json, threading, time
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 import config as C
 
 
 # ---------------------------------------------------------------- loading
-def load_table(name: str) -> pd.DataFrame:
+def load_table_csv(name: str) -> pd.DataFrame:
+    """Offline route: the gzipped CSV export shipped with the database kit."""
     files = sorted(glob.glob(str(C.DATA_DIR / name / "*" / "*.csv.gz")))
     if not files:
         raise FileNotFoundError(f"No files for '{name}' under {C.DATA_DIR}. Check DATA_DIR in .env")
     return pd.concat((pd.read_csv(f) for f in files), ignore_index=True)
 
 
-def load_all() -> dict:
-    return {t: load_table(t) for t in C.TABLES}
+_local = threading.local()
+
+
+def _supabase():
+    """One Supabase client per thread (a single HTTP/2 connection shared by threads gets dropped)."""
+    if not (C.SUPABASE_URL and C.SUPABASE_KEY):
+        raise SystemExit("DATA_SOURCE=supabase needs SUPABASE_URL and SUPABASE_KEY in .env "
+                         "(or set DATA_SOURCE=csv to read the local export)")
+    if not hasattr(_local, "sb"):
+        from supabase import create_client
+        _local.sb = create_client(C.SUPABASE_URL, C.SUPABASE_KEY)
+    return _local.sb
+
+
+def _api_page(name: str, key: str, start: int, attempts: int = 4) -> list:
+    end = start + C.API_PAGE_SIZE - 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return _supabase().table(name).select("*").order(key).range(start, end).execute().data
+        except Exception as exc:              # network blip / timeout: back off and retry
+            if attempt == attempts:
+                raise RuntimeError(f"{name}: page starting at row {start} failed: {exc}") from exc
+            time.sleep(2 ** attempt)
+
+
+def load_table_supabase(name: str) -> pd.DataFrame:
+    """Supabase route: page through the table over the REST API (1,000 rows per request),
+    ordered by primary key so pages never overlap or skip rows."""
+    key = C.PRIMARY_KEYS[name]
+    n = _supabase().table(name).select(key, count="exact", head=True).execute().count or 0
+    with ThreadPoolExecutor(C.API_WORKERS) as pool:
+        pages = pool.map(lambda start: _api_page(name, key, start), range(0, n, C.API_PAGE_SIZE))
+        rows = [r for p in pages for r in p]
+    if len(rows) != n:
+        raise RuntimeError(f"{name}: expected {n:,} rows from Supabase, got {len(rows):,}")
+    df = pd.DataFrame(rows)
+    # jsonb comes back as dict/list (key order lost); store it as JSON text like the CSV export does
+    for col in C.JSON_COLUMNS.get(name, []):
+        df[col] = df[col].map(lambda v: None if v is None else json.dumps(v, separators=(",", ":"), sort_keys=True))
+    # the API drops ".000" on whole-second timestamps; write them all as the export does (ms + "+00:00")
+    for col in C.TIMESTAMP_COLUMNS.get(name, []):
+        ts = pd.to_datetime(df[col], utc=True, format="ISO8601")
+        df[col] = ts.dt.strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3].add("+00:00").where(ts.notna())
+    # round-trip through CSV text so dtypes (bools, nullable columns, ints) match the CSV route exactly
+    return pd.read_csv(io.StringIO(df.to_csv(index=False)))
+
+
+def load_all(source: str = None) -> dict:
+    source = source or C.DATA_SOURCE
+    if source == "supabase":
+        return {t: load_table_supabase(t) for t in C.TABLES}
+    if source == "csv":
+        return {t: load_table_csv(t) for t in C.TABLES}
+    raise ValueError(f"DATA_SOURCE must be 'supabase' or 'csv', got '{source}'")
 
 
 def parse_loc(s):

@@ -1,9 +1,10 @@
-"""Step 1 - load the six SENTINEL tables (+ the provided features table) into pandas and sanity-check them."""
+"""Step 1 - load the six SENTINEL tables (+ the provided features table) from Supabase into pandas and sanity-check them."""
 import sentinel_lib as L
 import config as C
 
 tables = L.load_all()
-print(f"DATA_DIR = {C.DATA_DIR}\n")
+src = f"Supabase REST API ({C.SUPABASE_URL})" if C.DATA_SOURCE == "supabase" else f"CSV export ({C.DATA_DIR})"
+print(f"DATA_SOURCE = {C.DATA_SOURCE}  ->  loaded from {src}\n")
 for name, df in tables.items():
     print(f"=== {name}: {len(df):,} rows x {df.shape[1]} columns")
     print(df.head(2).T.head(8).to_string(), "\n")
