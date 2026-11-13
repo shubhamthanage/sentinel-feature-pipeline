@@ -39,6 +39,17 @@ def _prior_window(series_by_time, window):
     return series_by_time.rolling(window, closed="left")
 
 
+def _prev_time_strict(keys: pd.DataFrame, t: pd.Series) -> pd.Series:
+    """Latest earlier time in the same group, using ONLY times strictly before t.
+    A plain groupby().shift(1) would treat another row at the SAME timestamp as history
+    (leakage), so ties are collapsed to one time before shifting."""
+    cols = list(keys.columns)
+    k = keys.assign(t=t)
+    uniq = k.drop_duplicates(cols + ["t"]).sort_values(cols + ["t"])
+    uniq["prev_t"] = uniq.groupby(cols)["t"].shift(1)
+    return k.merge(uniq, on=cols + ["t"], how="left")["prev_t"].set_axis(keys.index)
+
+
 # ---------------------------------------------------------------- features
 def build_base(tables: dict) -> pd.DataFrame:
     """Transactions + outcome, sorted per customer by time (this order is what makes rolling safe)."""
@@ -79,9 +90,9 @@ def compute_features(df: pd.DataFrame, customers: pd.DataFrame) -> pd.DataFrame:
     out["failed_transactions_24h"] = fails
     out["has_recent_failures"] = fails >= C.FAILED_ATTEMPTS_MIN
 
-    # is_new_device: previous time THIS customer used THIS device
+    # is_new_device: previous time (strictly earlier) THIS customer used THIS device
     has_dev = df["device_id"].notna()
-    prev = df[has_dev].groupby(["customer_id", "device_id"])["t"].shift(1)
+    prev = _prev_time_strict(df.loc[has_dev, ["customer_id", "device_id"]], df.loc[has_dev, "t"])
     gap = df.loc[has_dev, "t"] - prev
     nd = pd.Series(pd.NA, index=df.index, dtype="object")
     nd[has_dev] = (prev.isna() | (gap > pd.Timedelta(C.DEVICE_WINDOW))).astype(bool)
@@ -95,7 +106,7 @@ def compute_features(df: pd.DataFrame, customers: pd.DataFrame) -> pd.DataFrame:
     out["customer_merchant_distance_km"] = haversine_km(clat, clon, mlat, mlon).round(2)
     ccity = pd.Series([x[0] for x in cl], index=df.index)
     known = ccity.notna()
-    prevc = df[known].assign(c=ccity[known]).groupby(["customer_id", "c"])["t"].shift(1)
+    prevc = _prev_time_strict(df.loc[known, ["customer_id"]].assign(c=ccity[known]), df.loc[known, "t"])
     gapc = df.loc[known, "t"] - prevc
     nc = pd.Series(pd.NA, index=df.index, dtype="object")
     nc[known] = (prevc.isna() | (gapc > pd.Timedelta("90D"))).astype(bool)

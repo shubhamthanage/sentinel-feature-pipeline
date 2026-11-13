@@ -60,6 +60,7 @@ Whole thing takes about 40 seconds on a laptop.
 
 All windows are **closed on the left**, so the current transaction is never in its own history. Rows are sorted by customer, time, transaction_id.
 History = every earlier authorisation attempt of the customer, declines included, across all splits (warmup supplies history for train).
+"Earlier" means a **strictly earlier timestamp**: another transaction at the same instant is never history. `is_new_device` and `is_new_city` use `_prev_time_strict` (ties collapsed before shifting) instead of a row-based `shift(1)`, which would leak a same-timestamp row.
 
 | Feature | Definition |
 |---|---|
@@ -72,7 +73,7 @@ History = every earlier authorisation attempt of the customer, declines included
 
 Support features for reason codes: `is_new_city`, `has_recent_failures` (>= 3 FAILED outcomes already received in 24 h), `is_new_account` (< 30 days).
 
-Leakage proof (step 3): 300 random rows are recomputed with a slow brute-force filter `t < current_time`; all 300 are identical to the fast pandas version.
+Leakage proof (step 3): 300 random rows are recomputed with a slow brute-force filter `t < current_time`; all 300 are identical to the fast pandas version (ratio, 1 h count, 24 h amount and `is_new_device`). A synthetic test then puts two transactions on the same device at the same instant and asserts both get `is_new_device = True`.
 
 ## 5. Reason codes and thresholds
 
