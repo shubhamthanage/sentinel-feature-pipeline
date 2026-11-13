@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+supabase_db_kit/
+*.csv.gz
+output/features_computed.csv
+output/reason_codes.csv
+.DS_Store
+.env
+.idea/

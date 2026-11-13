@@ -1,0 +1,11 @@
+feature,provided_column,rows,matches,match_rate_%,null_disagreements,mismatches
+amount_to_average_ratio,amount_to_avg_ratio,110000,110000,100.0,0,0
+is_new_device,is_new_device,110000,110000,100.0,0,0
+customer_merchant_distance_km,customer_merchant_distance_km,110000,110000,100.0,0,0
+is_night,is_night,110000,110000,100.0,0,0
+transaction_count_last_1_hour,txn_count_last_1h,110000,110000,100.0,0,0
+transaction_amount_last_24_hours_paise,txn_amount_last_24h_paise,110000,110000,100.0,0,0
+is_new_city,is_new_city,110000,110000,100.0,0,0
+has_recent_failures,has_recent_failures,110000,110000,100.0,0,0
+is_new_account,is_new_account,110000,110000,100.0,0,0
+hour_of_day,hour_of_day,110000,110000,100.0,0,0
